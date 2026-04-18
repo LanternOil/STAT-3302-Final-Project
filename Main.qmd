@@ -13,6 +13,7 @@ library(janitor)
 library(httr)
 library(glue)
 library(zip)
+library(GGally)
 ```
 
 
@@ -231,5 +232,42 @@ ggplot(oxy_count, aes(x = PEAKID, y = n)) +
        x = "Peak ID",
        y = "# of Attempts with Reported 02 usage")
 ```
+
+##Model Fitting
+
+```{r}
+exped_model = subset.data.frame(exped_tidy, select = c(PEAKID, TERMREASON, O2USED, SEASON_FACTOR, CAMPS, TOTMEMBERS))
+temp = subset.data.frame(peaks_tidy, select = c(PEAKID, HEIGHTM))
+exped_model = left_join(exped_model, temp, by = "PEAKID")
+
+model = glm(TERMREASON == 1 ~ O2USED + HEIGHTM + SEASON_FACTOR + CAMPS + TOTMEMBERS, data = exped_model, family = "binomial")
+summary(model)
+```
+
+##Diagnosis
+
+```{r}
+anova(model)
+```
+
+```{r}
+#| message: FALSE 
+temp = subset.data.frame(exped_model, select = c(TERMREASON, O2USED, SEASON_FACTOR, CAMPS, TOTMEMBERS, HEIGHTM))
+ggpairs(temp)
+```
+
+```{r}
+ggparcoord(exped_model)
+```
+
+
+
+
+
+
+
+
+
+
 
 
