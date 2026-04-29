@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(qpdf --decrypt \"c:\\\\Users\\\\krita\\\\OneDrive - The Ohio State University\\\\STAT-3302-Final-Project\\\\himalayan_presentation.pdf\" \"c:\\\\Users\\\\krita\\\\OneDrive - The Ohio State University\\\\STAT-3302-Final-Project\\\\himalayan_presentation_unlocked.pdf\")",
+      "Bash(qpdf --password=\"\" --decrypt \"c:\\\\Users\\\\krita\\\\OneDrive - The Ohio State University\\\\STAT-3302-Final-Project\\\\himalayan_presentation.pdf\" \"c:\\\\Users\\\\krita\\\\OneDrive - The Ohio State University\\\\STAT-3302-Final-Project\\\\himalayan_presentation_unlocked2.pdf\")",
+      "Bash(python -c ' *)"
+    ]
+  }
+}

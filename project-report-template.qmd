@@ -1,0 +1,421 @@
+---
+title: "Supplemental Oxygen, Altitude, and Himalayan Expedition Success"
+subtitle: "STAT 3302: Statistical Modeling for Discovery II"
+author:
+  - "Steven Dahms"
+  - "Bardaan Dhesi"
+  - "Kritarsh Negi"
+group: "Himalayan B"
+date: today
+format:
+  html:
+    embed-resources: true
+execute:
+  echo: false
+  warning: false
+  message: false
+---
+
+```{r}
+#| label: setup
+library(tidyverse)
+library(knitr)
+
+options(scipen = 999)
+theme_set(theme_minimal(base_size = 12))
+
+fmt_pct <- function(x, digits = 1) paste0(round(100 * x, digits), "%")
+fmt_p <- function(x) {
+  ifelse(x < 0.001, formatC(x, format = "e", digits = 2), sprintf("%.3f", x))
+}
+
+exped_tidy <- readr::read_csv(
+  "https://raw.githubusercontent.com/rfordatascience/tidytuesday/main/data/2025/2025-01-21/exped_tidy.csv",
+  show_col_types = FALSE
+)
+
+peaks_tidy <- readr::read_csv(
+  "https://raw.githubusercontent.com/rfordatascience/tidytuesday/main/data/2025/2025-01-21/peaks_tidy.csv",
+  show_col_types = FALSE
+)
+
+exped_model <- exped_tidy |>
+  mutate(
+    SUCCESS = as.integer(TERMREASON %in% 1:3),
+    SEASON_FACTOR = factor(
+      SEASON_FACTOR,
+      levels = c("Autumn", "Spring", "Summer", "Winter")
+    )
+  ) |>
+  select(
+    PEAKID, YEAR, SUCCESS, TERMREASON, O2USED, SEASON_FACTOR,
+    CAMPS, TOTMEMBERS
+  ) |>
+  left_join(
+    peaks_tidy |> select(PEAKID, PKNAME, HEIGHTM, REGION_FACTOR),
+    by = "PEAKID"
+  ) |>
+  mutate(
+    HEIGHTM_KM = HEIGHTM / 1000,
+    HEIGHTM_KM_C = HEIGHTM_KM - mean(HEIGHTM_KM, na.rm = TRUE)
+  ) |>
+  filter(
+    !is.na(SUCCESS), !is.na(O2USED), !is.na(SEASON_FACTOR),
+    !is.na(CAMPS), !is.na(TOTMEMBERS), !is.na(HEIGHTM_KM_C)
+  )
+
+model <- glm(
+  SUCCESS ~ O2USED * HEIGHTM_KM_C + I(HEIGHTM_KM_C^2) +
+    SEASON_FACTOR + CAMPS + TOTMEMBERS,
+  data = exped_model,
+  family = binomial
+)
+
+model_additive <- glm(
+  SUCCESS ~ O2USED + HEIGHTM_KM_C + I(HEIGHTM_KM_C^2) +
+    SEASON_FACTOR + CAMPS + TOTMEMBERS,
+  data = exped_model,
+  family = binomial
+)
+
+model_linear <- glm(
+  SUCCESS ~ O2USED * HEIGHTM_KM_C + SEASON_FACTOR + CAMPS + TOTMEMBERS,
+  data = exped_model,
+  family = binomial
+)
+
+interaction_test <- anova(model_additive, model, test = "Chisq")
+quadratic_test <- anova(model_linear, model, test = "Chisq")
+
+n_expeditions <- nrow(exped_model)
+n_peaks <- n_distinct(exped_model$PEAKID)
+overall_success <- mean(exped_model$SUCCESS)
+mean_height_km <- mean(exped_model$HEIGHTM_KM)
+interaction_p <- interaction_test$`Pr(>Chi)`[2]
+quadratic_p <- quadratic_test$`Pr(>Chi)`[2]
+pearson_dispersion <- sum(residuals(model, type = "pearson")^2) /
+  df.residual(model)
+```
+
+## Abstract
+
+We studied whether supplemental oxygen and peak height predict the probability
+that a Himalayan expedition successfully reaches a summit. Using 882 expeditions
+from 2020-2024, we fit a logistic regression model with oxygen use, centered peak
+height, a quadratic height term, season, number of high camps, team size, and an
+oxygen-by-height interaction. The model shows that oxygen use is strongly
+associated with summit success, and the oxygen advantage becomes much larger as
+peak height increases.
+
+## Introduction
+
+Himalayan climbing is a high-risk activity where weather, altitude, preparation,
+team size, and expedition strategy all affect the chance of success. Our main
+research question is: what factors predict whether an expedition successfully
+summits a Himalayan peak? We are especially interested in whether the effect of
+supplemental oxygen depends on peak height.
+
+This interaction is scientifically motivated. As altitude increases, lower
+oxygen availability makes movement and decision-making more difficult. If
+supplemental oxygen is useful, it should be most useful on the tallest peaks,
+where hypoxia is most severe. At the same time, very high peaks may attract more
+prepared and better-funded teams, so the raw relationship between height and
+success may not be a simple downward trend.
+
+## Data
+
+The data come from the Himalayan Database through the 2025-01-21 TidyTuesday
+release. The unit of observation is one expedition. The analysis uses
+`r n_expeditions` expeditions from 2020-2024 across `r n_peaks` distinct peaks.
+The response variable is `SUCCESS`, coded 1 when `TERMREASON` indicates success
+on the main peak, subpeak, foresummit, or a claimed success, and 0 otherwise.
+
+The overall success rate was `r fmt_pct(overall_success)`. Peak heights in the
+model ranged from `r min(exped_model$HEIGHTM)` to `r max(exped_model$HEIGHTM)`
+meters, with an average of `r round(mean_height_km, 2)` km. Oxygen use is not
+randomly assigned: expeditions using oxygen were generally on taller peaks, so
+we control for peak height directly in the model.
+
+```{r}
+#| label: tbl-oxygen-summary
+exped_model |>
+  group_by(O2USED) |>
+  summarise(
+    Expeditions = n(),
+    `Success rate` = fmt_pct(mean(SUCCESS)),
+    `Average height (km)` = round(mean(HEIGHTM_KM), 2),
+    .groups = "drop"
+  ) |>
+  mutate(`Oxygen used` = if_else(O2USED, "Yes", "No"), .before = O2USED) |>
+  select(-O2USED) |>
+  kable(caption = "Expedition outcomes by supplemental oxygen use.")
+```
+
+```{r}
+#| label: fig-height-success
+#| fig-cap: "Initial height-success plot with individual expedition outcomes and a LOESS smooth."
+height_success_plot <- exped_model |>
+  mutate(
+    outcome = factor(SUCCESS, levels = c(0, 1), labels = c("Failure", "Success"))
+  )
+
+ggplot(height_success_plot, aes(x = HEIGHTM_KM, y = SUCCESS)) +
+  geom_jitter(
+    aes(color = outcome),
+    width = 0,
+    height = 0.035,
+    alpha = 0.25,
+    size = 1.4
+  ) +
+  geom_smooth(
+    method = "loess",
+    formula = y ~ x,
+    color = "black",
+    fill = "gray70",
+    linewidth = 1.1
+  ) +
+  scale_color_manual(values = c("Failure" = "tomato", "Success" = "steelblue")) +
+  scale_y_continuous(
+    breaks = c(0, 1),
+    labels = c("Failure", "Success"),
+    limits = c(-0.08, 1.08)
+  ) +
+  labs(
+    x = "Peak height (km)",
+    y = "Expedition outcome",
+    color = "Outcome"
+  )
+```
+
+This initial plot shows why a straight-line height effect is too simple. The
+individual dots show each expedition at the failure and success margins, while
+the smooth curve suggests a non-linear pattern: success drops at some high
+altitudes but rises again among the tallest peaks. One plausible explanation is
+self-selection, since the tallest peaks tend to be attempted by more experienced,
+better-funded, and more prepared teams.However, due to the fact that most of the data was concentrated around roughy 5 peaks, we cannot rule out the possibility that the non-linear pattern is due to peak-level differences rather than a true height effect. We will return to this issue in the discussion.
+
+## Methods
+
+Because the response is binary, we model expedition success as a Bernoulli
+outcome using logistic regression with a logit link. Let $\pi_i$ be the
+probability that expedition $i$ succeeds. The fitted model is
+
+$$
+\log\left(\frac{\pi_i}{1-\pi_i}\right) =
+\beta_0 + \beta_1 O2_i + \beta_2 H_i + \beta_3 H_i^2 +
+\beta_4(O2_iH_i) + \beta_5 Season_i + \beta_6 Camps_i +
+\beta_7 TeamSize_i,
+$$
+
+where $H_i$ is peak height in kilometers, centered at the sample mean. Height was
+converted from meters to kilometers so a one-unit change is meaningful, and it
+was centered to make the intercept and interaction more stable. We included a
+quadratic height term because the initial height-success plot bends rather than
+following a constant upward or downward slope. In context, that pattern is
+reasonable: very tall peaks are more dangerous, but they also attract more
+selective teams. A likelihood ratio test confirms that the quadratic term
+improves fit compared with the same model without it
+($p = `r fmt_p(quadratic_p)`$).
+
+The main term of interest is `O2USED:HEIGHTM_KM_C`, which tests whether the
+association between supplemental oxygen and success changes as peaks get taller.
+We compare this model to an additive model without the interaction using a
+likelihood ratio test.
+
+## Results
+
+```{r}
+#| label: tbl-model-results
+coef_mat <- coef(summary(model))
+
+or_table <- tibble(
+  term = rownames(coef_mat),
+  estimate = coef_mat[, "Estimate"],
+  se = coef_mat[, "Std. Error"],
+  p_value = coef_mat[, "Pr(>|z|)"]
+) |>
+  mutate(
+    Predictor = recode(
+      term,
+      "O2USEDTRUE" = "Oxygen used",
+      "HEIGHTM_KM_C" = "Height, centered km",
+      "I(HEIGHTM_KM_C^2)" = "Height squared",
+      "SEASON_FACTORSpring" = "Spring vs Autumn",
+      "SEASON_FACTORSummer" = "Summer vs Autumn",
+      "SEASON_FACTORWinter" = "Winter vs Autumn",
+      "CAMPS" = "High camps",
+      "TOTMEMBERS" = "Team members",
+      "O2USEDTRUE:HEIGHTM_KM_C" = "Oxygen x height"
+    ),
+    OR = exp(estimate),
+    low = exp(estimate - 1.96 * se),
+    high = exp(estimate + 1.96 * se),
+    `95% Wald CI` = sprintf("%.2f to %.2f", low, high),
+    `p-value` = fmt_p(p_value)
+  ) |>
+  filter(term != "(Intercept)") |>
+  select(Predictor, OR, `95% Wald CI`, `p-value`)
+
+or_table |>
+  mutate(OR = round(OR, 2)) |>
+  kable(caption = "Odds ratios from the fitted logistic regression model.")
+```
+
+At the centered height value, oxygen use is associated with much higher odds of
+success (OR = 14.53, 95% CI 6.07 to 34.77). The centered height term is negative
+(OR = 0.09), while the quadratic term is also significant, confirming that the
+height effect is not constant over the range of the data.
+
+The interaction between oxygen use and height is positive and significant
+(OR = 27.85, $p = `r fmt_p(coef_mat["O2USEDTRUE:HEIGHTM_KM_C", "Pr(>|z|)"])`$).
+The likelihood ratio test comparing the additive model to the interaction model
+also supports keeping the interaction ($p = `r fmt_p(interaction_p)`$); AIC drops
+from `r round(AIC(model_additive), 2)` to `r round(AIC(model), 2)`. This means the
+estimated oxygen advantage increases sharply as peak height increases.
+
+High camps and team size were also positively associated with success. Each
+additional high camp multiplies the odds of success by about 1.77, and each
+additional team member multiplies the odds by about 1.10. After controlling for
+the other predictors, Spring expeditions have lower odds of success than Autumn
+expeditions.
+
+```{r}
+#| label: fig-interaction
+#| fig-cap: "Predicted summit success probability by peak height and oxygen use, holding season at Autumn and numeric controls at their sample means."
+height_mean <- mean(exped_model$HEIGHTM_KM, na.rm = TRUE)
+
+pred_grid <- expand.grid(
+  HEIGHTM_KM = seq(
+    min(exped_model$HEIGHTM_KM),
+    max(exped_model$HEIGHTM_KM),
+    length.out = 150
+  ),
+  O2USED = c(FALSE, TRUE),
+  SEASON_FACTOR = factor("Autumn", levels = levels(exped_model$SEASON_FACTOR)),
+  CAMPS = mean(exped_model$CAMPS, na.rm = TRUE),
+  TOTMEMBERS = mean(exped_model$TOTMEMBERS, na.rm = TRUE)
+) |>
+  mutate(HEIGHTM_KM_C = HEIGHTM_KM - height_mean)
+
+pred_grid$probability <- predict(model, newdata = pred_grid, type = "response")
+
+ggplot(
+  pred_grid,
+  aes(x = HEIGHTM_KM, y = probability, color = O2USED)
+) +
+  geom_line(linewidth = 1.1) +
+  scale_color_manual(
+    values = c("FALSE" = "tomato", "TRUE" = "steelblue"),
+    labels = c("No oxygen", "Oxygen used")
+  ) +
+  scale_y_continuous(labels = scales::percent_format(), limits = c(0, 1)) +
+  labs(
+    x = "Peak height (km)",
+    y = "Predicted probability of success",
+    color = "Supplemental oxygen"
+  )
+```
+
+## Diagnostics
+
+We checked residual plots rather than relying only on a calibration plot.
+For logistic regression, residuals do not need to be normally distributed, but
+they should be centered around zero without a strong trend across fitted
+probabilities. The Pearson dispersion estimate was
+`r round(pearson_dispersion, 2)`, which does not suggest serious overdispersion.
+
+```{r}
+#| label: fig-deviance-residuals
+#| fig-cap: "Deviance residuals plotted against fitted summit-success probabilities."
+resid_diag <- exped_model |>
+  mutate(
+    fitted_prob = fitted(model),
+    deviance_resid = residuals(model, type = "deviance"),
+    pearson_resid = residuals(model, type = "pearson")
+  )
+
+ggplot(resid_diag, aes(x = fitted_prob, y = deviance_resid)) +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "gray40") +
+  geom_point(alpha = 0.35, color = "steelblue") +
+  geom_smooth(method = "loess", se = FALSE, color = "tomato", linewidth = 1) +
+  labs(
+    x = "Fitted probability of summit success",
+    y = "Deviance residual"
+  )
+```
+
+```{r}
+#| label: fig-binned-pearson-residuals
+#| fig-cap: "Average Pearson residual by fitted-probability decile."
+resid_diag |>
+  mutate(prob_decile = ntile(fitted_prob, 10)) |>
+  group_by(prob_decile) |>
+  summarise(
+    mean_fitted = mean(fitted_prob),
+    mean_pearson_resid = mean(pearson_resid),
+    n = n(),
+    .groups = "drop"
+  ) |>
+  ggplot(aes(x = mean_fitted, y = mean_pearson_resid)) +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "gray40") +
+  geom_line(color = "steelblue") +
+  geom_point(aes(size = n), color = "steelblue") +
+  guides(size = "none") +
+  labs(
+    x = "Average fitted probability by decile",
+    y = "Average Pearson residual"
+  )
+```
+
+The residual plots are mostly centered around zero, suggesting that the model
+captures the main success-probability pattern. There is still some structure in
+the middle fitted-probability range, which is consistent with missing predictors
+such as route difficulty, short-term weather, expedition support, and climber
+experience.
+
+## Discussion
+
+The results support the central hypothesis: supplemental oxygen is not only
+associated with higher summit success overall, but its association with success
+is stronger on taller peaks. This matches the physiological motivation that
+oxygen matters more when altitude-related hypoxia is more severe.
+
+The findings should not be interpreted as a randomized causal effect. Teams
+choose whether to use oxygen, and that choice is related to peak height,
+resources, experience, route difficulty, and expedition goals. We controlled for
+height, season, camps, and team size, but the dataset does not fully capture
+climber skill, weather severity, budget, Sherpa support, or route-level technical
+difficulty. There may also be repeated dependence among expeditions on the same
+popular peaks, especially Mount Everest and other 8000-meter peaks.
+
+With more time, we would extend the analysis with peak-level random effects or
+fixed effects for heavily climbed peaks, add route and weather information, and
+separate main-peak success from subpeak or claimed success. We would also check
+whether oxygen use is acting partly as a proxy for expedition resources.
+
+## Conclusion
+
+For Himalayan expeditions from 2020-2024, summit success is strongly associated
+with supplemental oxygen, peak height, season, number of high camps, and team
+size. The most important result is the positive oxygen-by-height interaction:
+oxygen use appears increasingly beneficial as peak height rises. This suggests
+that planning for extreme-altitude climbs should treat oxygen strategy and peak
+height as connected factors rather than separate predictors.
+
+## References
+
+The Himalayan Database. https://www.himalayandatabase.com/
+
+R for Data Science TidyTuesday. 2025-01-21 Himalayan Expeditions data.
+https://github.com/rfordatascience/tidytuesday/tree/main/data/2025/2025-01-21
+
+## Appendix {.appendix}
+
+```{r}
+#| label: appendix-model-comparisons
+anova(model_additive, model, test = "Chisq")
+AIC(model_additive, model)
+
+anova(model_linear, model, test = "Chisq")
+AIC(model_linear, model)
+```
